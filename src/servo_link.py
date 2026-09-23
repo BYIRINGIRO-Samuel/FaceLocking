@@ -9,14 +9,13 @@ Run:
 Expected: the turret should visibly move to each test angle in sequence.
 """
 import time
-import json
 
 import paho.mqtt.client as mqtt
 
 MQTT_BROKER = "broker.benax.rw"
 MQTT_PORT = 1883
-T_CMD = "falcon/eye/servo/cmd"
-T_STATUS = "falcon/eye/servo/status"
+T_CMD = "LaTeam/eye/servo/cmd"
+T_STATUS = "LaTeam/eye/servo/status"
 
 
 def on_connect(client, userdata, flags, rc):
@@ -39,18 +38,18 @@ def main():
 
     time.sleep(1.5)  # let the connection settle
 
+    # Plain text protocol: ANGLE:N, STOP, HOME (matches the team's ESP32 firmware)
     test_sequence = [
-        {"pan": 90},    # center
-        {"pan": 45},    # left
-        {"pan": 135},   # right
-        {"pan": 90},    # back to center
-        {"home": True}, # explicit home
+        "ANGLE:90",   # center
+        "ANGLE:45",   # left
+        "ANGLE:135",  # right
+        "ANGLE:90",   # back to center
+        "HOME",       # explicit home
     ]
 
     for cmd in test_sequence:
-        payload = json.dumps(cmd)
-        print(f"[servo_link] publishing: {payload}")
-        client.publish(T_CMD, payload)
+        print(f"[servo_link] publishing: {cmd}")
+        client.publish(T_CMD, cmd)
         time.sleep(2.0)  # give the servo time to physically move
 
     print("[servo_link] test sequence done.")

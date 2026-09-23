@@ -14,7 +14,6 @@ Keys:
     q : quit
 """
 import time
-import json
 
 import cv2
 import paho.mqtt.client as mqtt
@@ -26,8 +25,8 @@ from .haar_5pt import Haar5ptDetector
 # -------------------------
 MQTT_BROKER = "broker.benax.rw"
 MQTT_PORT = 1883
-T_CMD = "falcon/eye/servo/cmd"
-T_STATUS = "falcon/eye/servo/status"
+T_CMD = "LaTeam/eye/servo/cmd"
+T_STATUS = "LaTeam/eye/servo/status"
 
 # -------------------------
 # Servo / control tuning
@@ -36,13 +35,14 @@ PAN_MIN_ANGLE = 10
 PAN_MAX_ANGLE = 170
 HOME_PAN = 90
 
-DEAD_ZONE_PX = 26      # ignore offsets smaller than this (prevents jitter when ~centered)
-GAIN = 0.02             # degrees of correction per pixel of offset -- tune this first
+DEAD_ZONE_PX = 15      # ignore offsets smaller than this (prevents jitter when ~centered)
+GAIN = 0.04             # degrees of correction per pixel of offset -- tune this first
 PUBLISH_MIN_DELTA = 1.0  # only publish if target angle changed by at least this many degrees
+MAX_STEP_PER_FRAME = 1.5  # caps how much target_pan can change in one frame -- smooths first-catch snap
 
 # If the servo turns the WRONG way (moves away from your face instead of
 # toward it), flip this to -1 rather than rewriting the math.
-PAN_DIRECTION = -1
+PAN_DIRECTION = 1
 
 LOST_FACE_HOLD_FRAMES = 30  # after this many consecutive frames with no face, stop adjusting
 
@@ -105,7 +105,8 @@ def main():
                 cv2.circle(vis, (face_cx, face_cy), 5, (0, 0, 255), -1)
 
                 if abs(offset_x) > DEAD_ZONE_PX:
-                    delta = PAN_DIRECTION * offset_x * GAIN
+                    raw_delta = PAN_DIRECTION * offset_x * GAIN
+                    delta = clamp(raw_delta, -MAX_STEP_PER_FRAME, MAX_STEP_PER_FRAME)
                     target_pan = clamp(target_pan + delta, PAN_MIN_ANGLE, PAN_MAX_ANGLE)
 
                 cv2.putText(vis, f"offset_x: {offset_x:+d}px  target_pan: {target_pan:.1f}",
@@ -118,7 +119,7 @@ def main():
 
             # only publish when the target actually moved meaningfully -- avoids flooding
             if last_published_pan is None or abs(target_pan - last_published_pan) >= PUBLISH_MIN_DELTA:
-                client.publish(T_CMD, json.dumps({"pan": round(target_pan, 1)}))
+                client.publish(T_CMD, f"ANGLE:{int(round(target_pan))}")
                 last_published_pan = target_pan
 
             cv2.imshow("Track and Follow (index 0)", vis)

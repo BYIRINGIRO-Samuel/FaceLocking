@@ -1,9 +1,12 @@
 # esp_firmware/main.py
 # Flash to ESP8266 (MicroPython) alongside mqtt_config.py and umqtt/simple.py.
 #
-# Subscribes to falcon/eye/servo/cmd and expects JSON payloads like:
-#   {"pan": 95}
-#   {"home": true}
+# Subscribes to falcon/eye/servo/cmd and expects PLAIN TEXT commands
+# (matching the team's established protocol, same as the ESP32 Arduino
+# version):
+#   ANGLE:95
+#   STOP
+#   HOME
 #
 # Moves the servo smoothly toward the latest target angle rather than
 # jumping, and only acts on the newest message if several arrive faster
@@ -80,23 +83,30 @@ def wifi_connect():
 def mqtt_callback(topic, msg):
     global target_pan
     try:
-        data = ujson.loads(msg)
+        command = msg.decode().strip().upper()
     except Exception as e:
         print("Bad payload:", msg, e)
         return
 
-    if data.get("home"):
+    if command == "HOME":
         target_pan = HOME_PAN
         print("HOME")
-        return
+    elif command == "STOP":
+        target_pan = current_pan  # hold exactly where it currently is
+        print("STOP / HOLDING:", current_pan)
+    elif command.startswith("ANGLE:"):
+        try:
+            angle = float(command[len("ANGLE:"):])
+            target_pan = clamp(angle, PAN_MIN_ANGLE, PAN_MAX_ANGLE)
+        except ValueError:
+            print("Invalid angle command:", command)
+    else:
+        print("Unknown command:", command)
 
-    if "pan" in data:
-        target_pan = clamp(float(data["pan"]), PAN_MIN_ANGLE, PAN_MAX_ANGLE)
 
-
-def publish_status():
+def publish_status(status="MOVING"):
     try:
-        client.publish(T_STATUS, ujson.dumps({"pan": current_pan}))
+        client.publish(T_STATUS, ujson.dumps({"status": status, "angle": current_pan}))
     except Exception as e:
         print("Status publish failed:", e)
 
@@ -123,14 +133,24 @@ def main():
 
     apply_servo_angle(current_pan)
 
-    try:
-        client = MQTTClient(CLIENT_ID, MQTT_BROKER, MQTT_PORT, keepalive=60)
-        client.set_callback(mqtt_callback)
-        client.connect()
-        client.subscribe(T_CMD)
-        print("MQTT OK, subscribed to", T_CMD)
-    except Exception as e:
-        print("MQTT FAIL:", e)
+    time.sleep(1.5)  # let WiFi/network fully settle before opening the MQTT socket
+
+    mqtt_connected = False
+    for attempt in range(5):
+        try:
+            client = MQTTClient(CLIENT_ID, MQTT_BROKER, MQTT_PORT, keepalive=60)
+            client.set_callback(mqtt_callback)
+            client.connect()
+            client.subscribe(T_CMD)
+            print("MQTT OK, subscribed to", T_CMD)
+            mqtt_connected = True
+            break
+        except Exception as e:
+            print(f"MQTT connect attempt {attempt + 1}/5 failed:", e)
+            time.sleep(2)
+
+    if not mqtt_connected:
+        print("MQTT FAIL after 5 attempts - Restarting...")
         time.sleep(5)
         machine.reset()
 
