@@ -223,13 +223,18 @@ class HaarFaceMesh5pt:
                 f"Install: pip install mediapipe==0.10.21"
             )
 
-        # Per-ROI mesh must be static: tracking mode sticks to one face across ROIs
-        # and makes multi-person frames look like only one box.
+        # Per-ROI mesh (Haar proposals) + full-frame multi-face mesh (catches people Haar misses)
         self.mesh = mp.solutions.face_mesh.FaceMesh(
             static_image_mode=True,
             max_num_faces=1,
             refine_landmarks=True,
-            min_detection_confidence=0.45,
+            min_detection_confidence=0.35,
+        )
+        self.mesh_full = mp.solutions.face_mesh.FaceMesh(
+            static_image_mode=True,
+            max_num_faces=8,
+            refine_landmarks=True,
+            min_detection_confidence=0.30,
         )
 
         # 5pt indices (same as your working file)
@@ -239,94 +244,168 @@ class HaarFaceMesh5pt:
         self.IDX_MOUTH_LEFT = 61
         self.IDX_MOUTH_RIGHT = 291
 
+    def _kps_from_landmarks(self, lm, W: int, H: int) -> np.ndarray:
+        idxs = [
+            self.IDX_LEFT_EYE,
+            self.IDX_RIGHT_EYE,
+            self.IDX_NOSE_TIP,
+            self.IDX_MOUTH_LEFT,
+            self.IDX_MOUTH_RIGHT,
+        ]
+        pts = [[lm[i].x * W, lm[i].y * H] for i in idxs]
+        kps = np.array(pts, dtype=np.float32)
+        if kps[0, 0] > kps[1, 0]:
+            kps[[0, 1]] = kps[[1, 0]]
+        if kps[3, 0] > kps[4, 0]:
+            kps[[3, 4]] = kps[[4, 3]]
+        return kps
+
+    def _face_from_kps(self, kps: np.ndarray, W: int, H: int, score: float = 1.0) -> Optional[FaceDet]:
+        if not _kps_span_ok(kps, min_eye_dist=8.0):
+            return None
+        bb = _bbox_from_5pt(kps, pad_x=0.55, pad_y_top=0.85, pad_y_bot=1.15)
+        x1, y1, x2, y2 = _clip_xyxy(bb[0], bb[1], bb[2], bb[3], W, H)
+        if (x2 - x1) < 20 or (y2 - y1) < 20:
+            return None
+        return FaceDet(x1=x1, y1=y1, x2=x2, y2=y2, score=float(score), kps=kps.astype(np.float32))
+
+    def _nms_faces(self, faces: List[FaceDet], iou_thresh: float = 0.35) -> List[FaceDet]:
+        if not faces:
+            return []
+        faces = sorted(faces, key=lambda f: (f.x2 - f.x1) * (f.y2 - f.y1), reverse=True)
+        keep: List[FaceDet] = []
+        used = [False] * len(faces)
+        for i, a in enumerate(faces):
+            if used[i]:
+                continue
+            keep.append(a)
+            used[i] = True
+            aw, ah = a.x2 - a.x1, a.y2 - a.y1
+            for j in range(i + 1, len(faces)):
+                if used[j]:
+                    continue
+                b = faces[j]
+                ix1, iy1 = max(a.x1, b.x1), max(a.y1, b.y1)
+                ix2, iy2 = min(a.x2, b.x2), min(a.y2, b.y2)
+                inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+                bw, bh = b.x2 - b.x1, b.y2 - b.y1
+                union = float(aw * ah + bw * bh - inter)
+                if union > 0 and inter / union > iou_thresh:
+                    used[j] = True
+        return keep
+
+    def _full_frame_mesh_faces(self, frame_bgr: np.ndarray, max_faces: int) -> List[FaceDet]:
+        H, W = frame_bgr.shape[:2]
+        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        res = self.mesh_full.process(rgb)
+        if not res.multi_face_landmarks:
+            return []
+        out: List[FaceDet] = []
+        for face_lm in res.multi_face_landmarks[:max_faces]:
+            kps = self._kps_from_landmarks(face_lm.landmark, W, H)
+            fd = self._face_from_kps(kps, W, H, score=0.95)
+            if fd is not None:
+                out.append(fd)
+        return out
+
     def _haar_faces(self, gray: np.ndarray) -> np.ndarray:
-        faces = self.face_cascade.detectMultiScale(
-            gray,
-            scaleFactor=1.08,
-            minNeighbors=4,
-            flags=cv2.CASCADE_SCALE_IMAGE,
-            minSize=self.min_size,
-        )
-        if faces is None or len(faces) == 0:
+        # CLAHE helps a lot with backlit / dark rooms (common webcam fail mode)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        eq = clahe.apply(gray)
+
+        def run(img):
+            return self.face_cascade.detectMultiScale(
+                img,
+                scaleFactor=1.1,
+                minNeighbors=3,
+                flags=cv2.CASCADE_SCALE_IMAGE,
+                minSize=self.min_size,
+            )
+
+        boxes = []
+        for img in (gray, eq):
+            found = run(img)
+            if found is not None and len(found):
+                boxes.extend(found.tolist())
+
+        if not boxes:
             return np.zeros((0, 4), dtype=np.int32)
-        return faces.astype(np.int32)  # (x,y,w,h)
+
+        # merge near-duplicates (same face found on gray + equalized)
+        boxes = np.array(boxes, dtype=np.int32)
+        keep = []
+        used = np.zeros(len(boxes), dtype=bool)
+        areas = boxes[:, 2] * boxes[:, 3]
+        order = np.argsort(areas)[::-1]
+        for i in order:
+            if used[i]:
+                continue
+            x, y, w, h = boxes[i]
+            keep.append(boxes[i])
+            used[i] = True
+            for j in order:
+                if used[j]:
+                    continue
+                x2, y2, w2, h2 = boxes[j]
+                ix1, iy1 = max(x, x2), max(y, y2)
+                ix2, iy2 = min(x + w, x2 + w2), min(y + h, y2 + h2)
+                iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+                inter = iw * ih
+                union = float(w * h + w2 * h2 - inter)
+                if union > 0 and inter / union > 0.35:
+                    used[j] = True
+        return np.array(keep, dtype=np.int32)
 
     def _roi_facemesh_5pt(self, roi_bgr: np.ndarray) -> Optional[np.ndarray]:
         H, W = roi_bgr.shape[:2]
         if H < 20 or W < 20:
             return None
 
-        rgb = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2RGB)
-        res = self.mesh.process(rgb)
-        if not res.multi_face_landmarks:
-            return None
+        # brighten dark ROIs a bit for FaceMesh
+        lab = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        l = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(l)
+        roi_boost = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
 
-        lm = res.multi_face_landmarks[0].landmark
-        idxs = [self.IDX_LEFT_EYE, self.IDX_RIGHT_EYE, self.IDX_NOSE_TIP, self.IDX_MOUTH_LEFT,
-                self.IDX_MOUTH_RIGHT]
-        pts = []
-        for i in idxs:
-            p = lm[i]
-            pts.append([p.x * W, p.y * H])
-        kps = np.array(pts, dtype=np.float32)
-
-        # enforce left/right ordering
-        if kps[0, 0] > kps[1, 0]:
-            kps[[0, 1]] = kps[[1, 0]]
-        if kps[3, 0] > kps[4, 0]:
-            kps[[3, 4]] = kps[[4, 3]]
-
-        return kps
+        for img in (roi_boost, roi_bgr):
+            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            res = self.mesh.process(rgb)
+            if not res.multi_face_landmarks:
+                continue
+            return self._kps_from_landmarks(res.multi_face_landmarks[0].landmark, W, H)
+        return None
 
     def detect(self, frame_bgr: np.ndarray, max_faces: int = 5) -> List[FaceDet]:
         H, W = frame_bgr.shape[:2]
+        out: List[FaceDet] = []
+
+        # 1) Full-frame multi-face mesh — best at finding BOTH people
+        out.extend(self._full_frame_mesh_faces(frame_bgr, max_faces=max_faces))
+
+        # 2) Haar proposals + per-ROI mesh (backup for angles mesh_full misses)
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         faces = self._haar_faces(gray)
-        if faces.shape[0] == 0:
-            return []
+        if faces.shape[0]:
+            areas = faces[:, 2] * faces[:, 3]
+            order = np.argsort(areas)[::-1]
+            faces = faces[order][:max_faces]
+            for (x, y, w, h) in faces:
+                mx, my = 0.30 * w, 0.40 * h
+                rx1, ry1, rx2, ry2 = _clip_xyxy(x - mx, y - my, x + w + mx, y + h + my, W, H)
+                roi = frame_bgr[ry1:ry2, rx1:rx2]
+                kps_roi = self._roi_facemesh_5pt(roi)
+                if kps_roi is None:
+                    continue
+                kps = kps_roi.copy()
+                kps[:, 0] += float(rx1)
+                kps[:, 1] += float(ry1)
+                fd = self._face_from_kps(kps, W, H, score=1.0)
+                if fd is not None:
+                    out.append(fd)
 
-        # sort by area desc, keep top max_faces
-        areas = faces[:, 2] * faces[:, 3]
-        order = np.argsort(areas)[::-1]
-        faces = faces[order][:max_faces]
-
-        out: List[FaceDet] = []
-        for (x, y, w, h) in faces:
-            # expand ROI a bit for FaceMesh stability
-            mx, my = 0.25 * w, 0.35 * h
-            rx1, ry1, rx2, ry2 = _clip_xyxy(x - mx, y - my, x + w + mx, y + h + my, W, H)
-            roi = frame_bgr[ry1:ry2, rx1:rx2]
-
-            kps_roi = self._roi_facemesh_5pt(roi)
-            if kps_roi is None:
-                if self.debug:
-                    print("[recognize] FaceMesh none for ROI -> skip")
-                continue
-
-            # map ROI kps back to full-frame coords
-            kps = kps_roi.copy()
-            kps[:, 0] += float(rx1)
-            kps[:, 1] += float(ry1)
-
-            # sanity: eye distance relative to Haar width
-            if not _kps_span_ok(kps, min_eye_dist=max(10.0, 0.18 * float(w))):
-                if self.debug:
-                    print("[recognize] 5pt geometry failed -> skip")
-                continue
-
-            # build bbox from kps (centered)
-            bb = _bbox_from_5pt(kps, pad_x=0.55, pad_y_top=0.85, pad_y_bot=1.15)
-            x1, y1, x2, y2 = _clip_xyxy(bb[0], bb[1], bb[2], bb[3], W, H)
-
-            out.append(
-                FaceDet(
-                    x1=x1, y1=y1, x2=x2, y2=y2,
-                    score=1.0,
-                    kps=kps.astype(np.float32),
-                )
-            )
-
-        return out
+        out = self._nms_faces(out, iou_thresh=0.35)
+        out = sorted(out, key=lambda f: (f.x2 - f.x1) * (f.y2 - f.y1), reverse=True)
+        return out[:max_faces]
 
 
 # -------------------------
@@ -366,7 +445,7 @@ class FaceDBMatcher:
 
         ok = best_dist <= self.dist_thresh
         return MatchResult(
-            name=self._names[best_i] if ok else None,
+            name=self._names[best_i],  # always nearest identity (even if rejected)
             distance=float(best_dist),
             similarity=float(best_sim),
             accepted=bool(ok),
@@ -449,9 +528,11 @@ def main():
             mr = matcher.match(emb)
 
             # label
-            label = mr.name if mr.name is not None else "Unknown"
+            label = mr.name if mr.accepted else "Unknown"
             line1 = f"{label}"
             line2 = f"dist={mr.distance:.3f} sim={mr.similarity:.3f}"
+            if not mr.accepted and mr.name:
+                line2 = f"near={mr.name} dist={mr.distance:.3f}"
 
             # color: known green, unknown red
             color = (0, 255, 0) if mr.accepted else (0, 0, 255)

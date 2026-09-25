@@ -70,37 +70,31 @@ Or force an index:
 python -m src.camera --cam 2
 ```
 
-### 5. Run the menu
+### 5. Launch the app (GUI)
 
 ```powershell
-python -m src.menu --cam 2
+python -m src
 ```
 
-| Key | Action |
-|-----|--------|
-| `1` | Camera test |
-| `2` | **Enroll** a face |
-| `3` | Live recognition |
-| `4` | **Full demo** (lock + expression + multi-face + nose) |
-| `5` | Expression calibration numbers |
-| `6` / `7` | Servo MQTT / track-and-follow (needs ESP) |
-| `c` | Change camera index |
-| `q` | Quit |
+Flow:
+1. **Welcome screen** (animated, black / gold / white · Poppins) — click or press Enter  
+2. **Live camera** fills the window  
+3. Use the **bottom action bar**: LIVE · ENROLL · RECOGNIZE · FULL DEMO · QUIT  
 
-After enrolling, use **`4`** to demo everything.
+**ENROLL:** type the name in a dialog → **CAPTURE** / **SAVE** appear above the bar (mouse clicks, not keyboard).  
 
-In any video window, press **`q`** to return to the menu.
+Data is stored in `data/db/` and `data/enroll/<Name>/`.
 
 ## Enrollment tips
 
-1. Menu → `2`, enter a name  
+1. GUI → **Enroll Face** → type the name → Start Enrollment  
 2. Face the camera in good light  
-3. **SPACE** ≈ 10–15 captures (small pose changes)  
-4. **`s`** to save, **`q`** to quit  
+3. Click **CAPTURE** several times (~10–15), then click **SAVE**  
+4. Click **QUIT** (or press Q) to return to the GUI  
 
 Database files live under `data/db/` (local; face crops under `data/enroll/` are gitignored).
 
-## Full demo checklist (`menu` → `4`)
+## Full demo checklist (GUI → **Full Demo**)
 
 | Check | What you should see |
 |-------|---------------------|
@@ -136,7 +130,7 @@ Topics (plain text): `LaTeam/eye/servo/cmd` ← `ANGLE:N` / `STOP` / `HOME`.
 ```
 face-locking/
 ├── src/
-│   ├── menu.py                 # launcher
+│   ├── gui_app.py / menu.py    # decorative GUI launcher
 │   ├── enroll.py / recognize.py
 │   ├── identity_lock_track.py  # full demo
 │   ├── expression.py

@@ -1,12 +1,10 @@
 {
-  "updated_at": "2026-09-10 14:28:23",
+  "updated_at": "2026-09-25 10:18:58",
   "embedding_dim": 512,
   "names": [
-    "Bonheur",
-    "Duff"
+    "B.Alliance",
+    "B.Samuel"
   ],
-  "samples_existing_used": 16,
-  "samples_new_used": 0,
-  "samples_total_used": 16,
-  "note": "Embeddings are L2-normalized vectors. Matching uses cosine similarity."
+  "samples_total_used": 3,
+  "note": "Saved from Face Locking GUI"
 }

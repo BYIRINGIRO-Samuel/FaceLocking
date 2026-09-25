@@ -384,17 +384,22 @@ def main():
                                 (200, 220, 255),
                                 1,
                             )
+                    elif mr.accepted:
+                        # Other enrolled faces keep their names (don't steal primary lock)
+                        color = (0, 200, 0)
+                        cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
+                        y_text = y1 - 8 if y1 >= 24 else y2 + 20
+                        draw_label(vis, f"{mr.name}", (x1, y_text), 0.65, color, 2)
+                        draw_label(vis, f"dist={mr.distance:.3f}", (x1, y_text + 20), 0.5, (180, 255, 180), 1)
                     else:
-                        # Background / other faces -> UNKNOWN (never steal the lock)
+                        # True strangers only
                         strangers += 1
                         color = (0, 0, 255)
                         cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
                         for kx, ky in f.kps.astype(int):
                             cv2.circle(vis, (int(kx), int(ky)), 2, color, -1)
                         y_text = y1 - 8 if y1 >= 24 else y2 + 20
-                        who = "UNKNOWN"
-                        if mr.name and not mr.accepted:
-                            who = f"UNKNOWN (near {mr.name})"
+                        who = f"UNKNOWN (near {mr.name})" if mr.name else "UNKNOWN"
                         draw_label(vis, who, (x1, y_text), 0.65, color, 2)
                         draw_label(vis, f"dist={mr.distance:.3f}", (x1, y_text + 20), 0.5, (180, 180, 255), 1)
 
