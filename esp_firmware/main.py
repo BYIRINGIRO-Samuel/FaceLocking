@@ -1,7 +1,7 @@
 # esp_firmware/main.py
 # Flash to ESP8266 (MicroPython) alongside mqtt_config.py and umqtt/simple.py.
 #
-# Subscribes to falcon/eye/servo/cmd and expects PLAIN TEXT commands
+# Subscribes to LaTeam/eye/servo/cmd and expects PLAIN TEXT commands
 # (matching the team's established protocol, same as the ESP32 Arduino
 # version):
 #   ANGLE:95

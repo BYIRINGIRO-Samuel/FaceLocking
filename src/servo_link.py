@@ -18,7 +18,7 @@ T_CMD = "LaTeam/eye/servo/cmd"
 T_STATUS = "LaTeam/eye/servo/status"
 
 
-def on_connect(client, userdata, flags, rc):
+def on_connect(client, userdata, flags, rc, properties=None):
     print(f"[servo_link] connected (rc={rc})")
     client.subscribe(T_STATUS)
 
@@ -28,7 +28,7 @@ def on_message(client, userdata, msg):
 
 
 def main():
-    client = mqtt.Client()
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.on_connect = on_connect
     client.on_message = on_message
 

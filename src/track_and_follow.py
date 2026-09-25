@@ -51,7 +51,7 @@ def clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
 
-def on_connect(client, userdata, flags, rc):
+def on_connect(client, userdata, flags, rc, properties=None):
     print(f"[track_and_follow] MQTT connected (rc={rc})")
     client.subscribe(T_STATUS)
 
@@ -68,7 +68,7 @@ def main():
 
     det = Haar5ptDetector(min_size=(70, 70), smooth_alpha=0.80, debug=False)
 
-    client = mqtt.Client()
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.on_connect = on_connect
     client.on_message = on_message
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)

@@ -2,3 +2,14 @@
 __pycache__/
 *.log
 models/
+wheels/
+buffalo_l.zip
+deps.json
+deps2.json
+urls.txt
+data/enroll/
+data/debug_aligned/
+data/db/face_db.npz
+esp_firmware/mqtt_config.py
+*.pyc
+.DS_Store

@@ -22,6 +22,7 @@ Notes:
   Since embeddings are L2-normalized, cosine_similarity = dot(a,b).
 """
 from __future__ import annotations
+import argparse
 import time
 import json
 from dataclasses import dataclass
@@ -222,13 +223,13 @@ class HaarFaceMesh5pt:
                 f"Install: pip install mediapipe==0.10.21"
             )
 
-        # IMPORTANT: we run FaceMesh on ROI (one face per ROI), so max_num_faces=1
+        # Per-ROI mesh must be static: tracking mode sticks to one face across ROIs
+        # and makes multi-person frames look like only one box.
         self.mesh = mp.solutions.face_mesh.FaceMesh(
-            static_image_mode=False,
+            static_image_mode=True,
             max_num_faces=1,
             refine_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
+            min_detection_confidence=0.45,
         )
 
         # 5pt indices (same as your working file)
@@ -241,8 +242,8 @@ class HaarFaceMesh5pt:
     def _haar_faces(self, gray: np.ndarray) -> np.ndarray:
         faces = self.face_cascade.detectMultiScale(
             gray,
-            scaleFactor=1.1,
-            minNeighbors=5,
+            scaleFactor=1.08,
+            minNeighbors=4,
             flags=cv2.CASCADE_SCALE_IMAGE,
             minSize=self.min_size,
         )
@@ -376,6 +377,15 @@ class FaceDBMatcher:
 # Demo
 # -------------------------
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--cam",
+        type=int,
+        default=2,
+        help="Camera index (your USB cam is usually 2 on this PC)",
+    )
+    args = parser.parse_args()
+
     db_path = Path("data/db/face_db.npz")
 
     det = HaarFaceMesh5pt(
@@ -391,11 +401,11 @@ def main():
     db = load_db_npz(db_path)
     matcher = FaceDBMatcher(db=db, dist_thresh=0.37)  # from your evaluate_new output
 
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    cap = cv2.VideoCapture(args.cam, cv2.CAP_DSHOW)
     if not cap.isOpened():
-        raise RuntimeError("Camera not available")
+        raise RuntimeError(f"Camera {args.cam} not available. Try --cam 0 or --cam 1.")
 
-    print("Recognize (multi-face). q=quit, r=reload DB, +/- threshold, d=debug overlay")
+    print(f"Recognize (cam {args.cam}). q=quit, r=reload DB, +/- threshold, d=debug overlay")
 
     t0 = time.time()
     frames = 0

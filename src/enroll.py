@@ -26,6 +26,7 @@ Controls:
 - q: quit
 """
 from __future__ import annotations
+import argparse
 import json
 import time
 from dataclasses import dataclass
@@ -158,6 +159,15 @@ def draw_status(
 # Main
 # -------------------------
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--cam",
+        type=int,
+        default=2,
+        help="Camera index (your USB cam is usually 2 on this PC)",
+    )
+    args = parser.parse_args()
+
     cfg = EnrollConfig()
     ensure_dirs(cfg)
 
@@ -187,15 +197,16 @@ def main():
     auto = False
     last_auto = 0.0
 
-    cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
+    cap = cv2.VideoCapture(args.cam, cv2.CAP_DSHOW)
     if not cap.isOpened():
-        raise RuntimeError("Failed to open camera.")
+        raise RuntimeError(f"Failed to open camera index {args.cam}. Try --cam 0 or --cam 1.")
 
     cv2.namedWindow(cfg.window_main, cv2.WINDOW_NORMAL)
     cv2.namedWindow(cfg.window_aligned, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(cfg.window_aligned, 240, 240)
+    sized = False
 
-    print("\nEnrollment started.")
+    print(f"\nEnrollment started (camera index {args.cam}).")
     if base_samples:
         print(f"Re-enroll mode: found {len(base_samples)} existing samples in {person_dir}/")
     print("Tip: stable lighting, move slightly left/right, different expressions.")
@@ -210,6 +221,11 @@ def main():
             ok, frame = cap.read()
             if not ok:
                 break
+
+            if not sized:
+                h, w = frame.shape[:2]
+                cv2.resizeWindow(cfg.window_main, w, h)
+                sized = True
 
             vis = frame.copy()
             faces = det.detect(frame, max_faces=1)
